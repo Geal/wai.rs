@@ -21,6 +21,13 @@ pub trait Application {
     where F: Fn(Response) -> Self::Output;
 }
 
+pub trait Middleware {
+  type Input: Application;
+  type Output: Application;
+
+  fn apply(i: Self::Input) -> Self::Output;
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -28,11 +35,16 @@ mod tests {
 
   pub struct MyApp {
     s: String,
+    counter: u8,
   }
 
   pub struct Server<App> {
     app: App,
     counter: u8,
+  }
+
+  pub struct LoggingMiddleware<A> {
+    app: A,
   }
 
   impl<App> Server<App> {
@@ -61,14 +73,35 @@ mod tests {
     type Output = FutureResult<ResponseReceived, io::Error>;
     fn run<F>(&mut self, req: Request, respond: F) -> Self::Output
       where F: Fn(Response) -> Self::Output {
-       println!("app got request: {:?}", req);
+       println!("{}|app got request: {:?}", self.counter, req);
+       self.counter += 1;
        respond(Response)
     }
   }
 
+  impl<A:Application> Middleware for LoggingMiddleware<A> {
+    type Input = A;
+    type Output = Self;
+    fn apply(a: A) -> LoggingMiddleware<A> {
+      LoggingMiddleware { app: a }
+    }
+  }
+
+  impl<A: Application> Application for LoggingMiddleware<A> {
+    type Output = <A as Application>::Output;
+    fn run<F>(&mut self, req: Request, respond: F) -> Self::Output
+      where F: Fn(Response) -> Self::Output {
+      println!("logging");
+      self.app.run(req, respond)
+    }
+  }
+
+
   #[test]
   fn test() {
-    let mut server = Server::new(MyApp { s: "app".to_string() });
+    let mut server = Server::new(
+      LoggingMiddleware::apply(MyApp { s: "app".to_string(), counter: 0 })
+    );
     server.run();
   }
 }
