@@ -6,13 +6,15 @@ extern crate http;
 use futures::{Future, IntoFuture, Stream};
 use http::{Request, Response, StatusCode};
 use std::io;
+use std::convert::AsRef;
 
 #[derive(Clone,Debug)]
 pub struct ResponseReceived;
 
 pub trait Application {
   type Output: IntoFuture<Item=ResponseReceived, Error=io::Error>;
-  type Body: Stream<Item=u8, Error=()>;
+  type Body: Stream<Item=Self::BodyStream, Error=()>;
+  type BodyStream: AsRef<[u8]>;
 
   fn run<F>(&mut self, req: Request<Self::Body>, respond: F) -> Self::Output
     where F: Fn(Response<Self::Body>) -> Self::Output;
@@ -51,7 +53,7 @@ mod tests {
     }
   }
 
-  impl<App: Application<Output=FutureResult<ResponseReceived, io::Error>, Body=Empty<u8, ()>>> Server<App> {
+  impl<Bs: AsRef<[u8]>, App: Application<Output=FutureResult<ResponseReceived, io::Error>, Body=Empty<Bs, ()>, BodyStream=Bs>> Server<App> {
     pub fn run(&mut self) {
       for i in 1..3 {
         std::thread::sleep_ms(500);
@@ -74,7 +76,8 @@ mod tests {
 
   impl Application for MyApp {
     type Output = FutureResult<ResponseReceived, io::Error>;
-    type Body = Empty<u8, ()>;
+    type Body = Empty<Vec<u8>, ()>;
+    type BodyStream = Vec<u8>;
 
     fn run<F>(&mut self, req: Request<Self::Body>, respond: F) -> Self::Output
       where F: Fn(Response<Self::Body>) -> Self::Output {
@@ -98,6 +101,7 @@ mod tests {
   impl<A: Application> Application for LoggingMiddleware<A> {
     type Output = <A as Application>::Output;
     type Body = <A as Application>::Body;
+    type BodyStream = <A as Application>::BodyStream;
 
     fn run<F>(&mut self, req: Request<Self::Body>, respond: F) -> Self::Output
       where F: Fn(Response<Self::Body>) -> Self::Output {
