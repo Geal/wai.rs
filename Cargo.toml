@@ -6,3 +6,4 @@ edition = "2018"
 
 [dependencies]
 futures = "^0.1"
+http = "^0.1"

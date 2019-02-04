@@ -1,24 +1,21 @@
 //! type Application = Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
-//#![feature(impl_trait_in_bindings)]
 
 extern crate futures;
+extern crate http;
 
-use futures::{Future, IntoFuture};
-
+use futures::{Future, IntoFuture, Stream};
+use http::{Request, Response, StatusCode};
 use std::io;
 
-#[derive(Clone,Debug)]
-pub struct Request;
-#[derive(Clone,Debug)]
-pub struct Response;
 #[derive(Clone,Debug)]
 pub struct ResponseReceived;
 
 pub trait Application {
   type Output: IntoFuture<Item=ResponseReceived, Error=io::Error>;
+  type Body: Stream<Item=u8, Error=()>;
 
-  fn run<F>(&mut self, req: Request, respond: F) -> Self::Output
-    where F: Fn(Response) -> Self::Output;
+  fn run<F>(&mut self, req: Request<Self::Body>, respond: F) -> Self::Output
+    where F: Fn(Response<Self::Body>) -> Self::Output;
 }
 
 pub trait Middleware {
@@ -32,6 +29,7 @@ pub trait Middleware {
 mod tests {
   use super::*;
   use futures::future::{self, FutureResult};
+  use futures::stream::{Empty, empty};
 
   pub struct MyApp {
     s: String,
@@ -53,12 +51,17 @@ mod tests {
     }
   }
 
-  impl<App: Application<Output=FutureResult<ResponseReceived, io::Error>>> Server<App> {
+  impl<App: Application<Output=FutureResult<ResponseReceived, io::Error>, Body=Empty<u8, ()>>> Server<App> {
     pub fn run(&mut self) {
       for i in 1..3 {
         std::thread::sleep_ms(500);
 
-        let mut received = self.app.run(Request, |response| {
+        let req = Request::builder()
+          .method("GET")
+          .uri("/")
+          .header("Host", "lolcatho.st")
+          .body(empty()).unwrap();
+        let mut received = self.app.run(req, |response| {
           println!("callback called");
           future::ok(ResponseReceived)
         });
@@ -71,11 +74,16 @@ mod tests {
 
   impl Application for MyApp {
     type Output = FutureResult<ResponseReceived, io::Error>;
-    fn run<F>(&mut self, req: Request, respond: F) -> Self::Output
-      where F: Fn(Response) -> Self::Output {
+    type Body = Empty<u8, ()>;
+
+    fn run<F>(&mut self, req: Request<Self::Body>, respond: F) -> Self::Output
+      where F: Fn(Response<Self::Body>) -> Self::Output {
        println!("{}|app got request: {:?}", self.counter, req);
        self.counter += 1;
-       respond(Response)
+       let rep = Response::builder()
+         .status(StatusCode::OK)
+         .body(empty()).unwrap();
+       respond(rep)
     }
   }
 
@@ -89,8 +97,10 @@ mod tests {
 
   impl<A: Application> Application for LoggingMiddleware<A> {
     type Output = <A as Application>::Output;
-    fn run<F>(&mut self, req: Request, respond: F) -> Self::Output
-      where F: Fn(Response) -> Self::Output {
+    type Body = <A as Application>::Body;
+
+    fn run<F>(&mut self, req: Request<Self::Body>, respond: F) -> Self::Output
+      where F: Fn(Response<Self::Body>) -> Self::Output {
       println!("logging");
       self.app.run(req, respond)
     }
